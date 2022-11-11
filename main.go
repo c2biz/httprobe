@@ -52,6 +52,10 @@ func main() {
 	var method string
 	flag.StringVar(&method, "method", "GET", "HTTP method to use")
 
+	// HTTP User-Agent to use
+	var userAgent string
+	flag.StringVar(&userAgent, "A", "httprobe", "HTTP User-Agent to use")
+
 	flag.Parse()
 
 	// make an actual time.Duration out of the timeout
@@ -96,7 +100,7 @@ func main() {
 
 				// always try HTTPS first
 				withProto := "https://" + url
-				if isListening(client, withProto, method) {
+				if isListening(client, withProto, method, userAgent) {
 					output <- withProto
 
 					// skip trying HTTP if --prefer-https is set
@@ -120,7 +124,7 @@ func main() {
 		go func() {
 			for url := range httpURLs {
 				withProto := "http://" + url
-				if isListening(client, withProto, method) {
+				if isListening(client, withProto, method, userAgent) {
 					output <- withProto
 					continue
 				}
@@ -210,13 +214,13 @@ func main() {
 	outputWG.Wait()
 }
 
-func isListening(client *http.Client, url, method string) bool {
+func isListening(client *http.Client, url, method string, userAgent string) bool {
 
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return false
 	}
-
+	req.Header.Add("User-Agent", userAgent)
 	req.Header.Add("Connection", "close")
 	req.Close = true
 
