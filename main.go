@@ -34,7 +34,7 @@ func main() {
 
 	// probe flags
 	var probes probeArgs
-	flag.Var(&probes, "p", "add additional probe (proto:port)")
+	flag.Var(&probes, "p", "add additional probe (e.g. -p proto:port or -p <small|large|xlarge>)")
 
 	// skip default probes flag
 	var skipDefault bool
