@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -56,6 +57,10 @@ func main() {
 	var userAgent string
 	flag.StringVar(&userAgent, "A", "httprobe", "HTTP User-Agent to use")
 
+	// http/socks proxy
+	var proxyURI string
+	flag.StringVar(&proxyURI, "x", "", "HTTP/SOCKS to use")
+
 	flag.Parse()
 
 	// make an actual time.Duration out of the timeout
@@ -70,6 +75,13 @@ func main() {
 			Timeout:   timeout,
 			KeepAlive: time.Second,
 		}).DialContext,
+	}
+
+	if proxyURI != "" {
+		PROXY_ADDR := proxyURI
+		url_i := url.URL{}
+		url_proxy, _ := url_i.Parse(PROXY_ADDR)
+		tr.Proxy = http.ProxyURL(url_proxy)
 	}
 
 	re := func(req *http.Request, via []*http.Request) error {
