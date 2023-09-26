@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +26,13 @@ func (p *probeArgs) Set(val string) error {
 
 func (p probeArgs) String() string {
 	return strings.Join(p, ",")
+}
+
+// Define a function to compute sleep duration with jitter
+func sleepWithJitter(base time.Duration, jitter time.Duration) {
+	sleep := base + time.Duration(rand.Int63n(int64(jitter)+1))
+	fmt.Println("Sleeping (seconds):", sleep)
+	time.Sleep(sleep)
 }
 
 func main() {
@@ -61,10 +69,25 @@ func main() {
 	var proxyURI string
 	flag.StringVar(&proxyURI, "x", "", "HTTP/SOCKS to use")
 
+	// concurrency flag
+	var sleepCount int
+	flag.IntVar(&sleepCount, "S", 0, "set the base sleep count between requests")
+
+	// concurrency flag
+	var jitterCount int
+	flag.IntVar(&jitterCount, "j", 0, "set the jitter count between requests")
+
 	flag.Parse()
 
 	// make an actual time.Duration out of the timeout
 	timeout := time.Duration(to * 1000000)
+
+	// convert the sleepCount and jitterCount to time.Duration
+	baseSleep := time.Duration(sleepCount) * time.Second    // replace with the appropriate time unit
+	jitterSleep := time.Duration(jitterCount) * time.Second // replace with the appropriate time unit
+
+	// seed random generator for sleep/jiter
+	rand.Seed(time.Now().UnixNano())
 
 	var tr = &http.Transport{
 		MaxIdleConns:      30,
@@ -109,6 +132,8 @@ func main() {
 
 		go func() {
 			for url := range httpsURLs {
+				// add sleep with jitter before making a request
+				sleepWithJitter(baseSleep, jitterSleep)
 
 				// always try HTTPS first
 				withProto := "https://" + url
@@ -135,6 +160,9 @@ func main() {
 
 		go func() {
 			for url := range httpURLs {
+				// add sleep with jitter before making a request
+				sleepWithJitter(baseSleep, jitterSleep)
+
 				withProto := "http://" + url
 				if isListening(client, withProto, method, userAgent) {
 					output <- withProto
