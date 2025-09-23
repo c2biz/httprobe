@@ -57,9 +57,9 @@ func main() {
 	var userAgent string
 	flag.StringVar(&userAgent, "A", "httprobe", "HTTP User-Agent to use")
 
-	// http/socks proxy
-	var proxyURI string
-	flag.StringVar(&proxyURI, "x", "", "HTTP/SOCKS to use")
+	// HTTP proxy to use
+	var proxyURL string
+	flag.StringVar(&proxyURL, "proxy", "", "HTTP proxy URL (e.g., http://proxy:8080)")
 
 	flag.Parse()
 
@@ -77,11 +77,14 @@ func main() {
 		}).DialContext,
 	}
 
-	if proxyURI != "" {
-		PROXY_ADDR := proxyURI
-		url_i := url.URL{}
-		url_proxy, _ := url_i.Parse(PROXY_ADDR)
-		tr.Proxy = http.ProxyURL(url_proxy)
+	// Configure proxy if provided
+	if proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid proxy URL: %s\n", err)
+			os.Exit(1)
+		}
+		tr.Proxy = http.ProxyURL(proxy)
 	}
 
 	re := func(req *http.Request, via []*http.Request) error {
