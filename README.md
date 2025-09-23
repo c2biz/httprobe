@@ -82,3 +82,23 @@ Run the container, passing the contents of a file into stdin of the process insi
 ▶ cat domains.txt | docker run -i httprobe <args>
 ```
 
+## Usage
+
+```
+Usage of ./httprobe:
+  -A string
+        HTTP User-Agent to use (default "httprobe")
+  -c int
+        set the concurrency level (split equally between HTTPS and HTTP requests) (default 20)
+  -method string
+        HTTP method to use (default "GET")
+  -p value
+        add additional probe (e.g. -p proto:port or -p <small|large|xlarge>)
+  -prefer-https
+        only try plain HTTP if HTTPS fails
+  -proxy string
+        HTTP proxy URL (e.g., http://proxy:8080)
+  -s    skip the default probes (http:80 and https:443)
+  -t int
+        timeout (milliseconds) (default 10000)
+```
