@@ -43,6 +43,8 @@ You can set the concurrency level with the `-c` flag:
 ▶ cat domains.txt | httprobe -c 50
 ```
 
+Note: concurrency is split evenly between HTTPS and HTTP workers. With `--prefer-https`, HTTP workers only handle HTTPS failures, so effective concurrency is roughly `c/2`. To get 50 concurrent probes with `--prefer-https`, use `-c 100`.
+
 ## Timeout
 
 You can change the timeout by using the `-t` flag and specifying a timeout in milliseconds:
@@ -67,6 +69,42 @@ Sometimes you don't care about checking HTTP if HTTPS is working. You can do tha
 ```
 ▶ cat domains.txt | httprobe --prefer-https
 ```
+
+## Response Info
+
+You can include extra information in the output with `-status`, `-server`, and `-title`:
+
+```
+▶ cat domains.txt | httprobe -status -server -title
+https://example.com [200] [nginx] [Example Domain]
+```
+
+## Proxy
+
+Route requests through an HTTP or SOCKS5 proxy:
+
+```
+▶ cat domains.txt | httprobe -proxy http://proxy:8080
+▶ cat domains.txt | httprobe -proxy socks5://proxy:1080
+```
+
+## Rate Limiting
+
+Control request rate with `-rate` (requests per second):
+
+```
+▶ cat domains.txt | httprobe -rate 5
+```
+
+Quick reference:
+
+| `-rate` | Requests per minute | Delay between requests |
+|---------|---------------------|------------------------|
+| `10`    | 600/min             | 100ms                  |
+| `5`     | 300/min             | 200ms                  |
+| `1`     | 60/min              | 1s                     |
+| `0.5`   | 30/min              | 2s                     |
+| `0.1`   | 6/min               | 10s                    |
 
 ## Docker
 
@@ -97,8 +135,16 @@ Usage of ./httprobe:
   -prefer-https
         only try plain HTTP if HTTPS fails
   -proxy string
-        HTTP proxy URL (e.g., http://proxy:8080)
+        proxy URL (e.g., http://proxy:8080 or socks5://proxy:1080)
+  -rate float
+        requests per second (0 = unlimited)
   -s    skip the default probes (http:80 and https:443)
+  -server
+        show Server header
+  -status
+        show HTTP status code
   -t int
         timeout (milliseconds) (default 10000)
+  -title
+        show page title
 ```

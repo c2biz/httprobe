@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"golang.org/x/net/proxy"
+	"golang.org/x/time/rate"
 )
 
 type probeArgs []string
@@ -63,6 +64,20 @@ func main() {
 	// HTTP/SOCKS5 proxy to use
 	var proxyURL string
 	flag.StringVar(&proxyURL, "proxy", "", "proxy URL (e.g., http://proxy:8080 or socks5://proxy:1080)")
+
+	// extra output flags
+	var showStatus bool
+	flag.BoolVar(&showStatus, "status", false, "show HTTP status code")
+
+	var showServer bool
+	flag.BoolVar(&showServer, "server", false, "show Server header")
+
+	var showTitle bool
+	flag.BoolVar(&showTitle, "title", false, "show page title")
+
+	// rate limiting
+	var rateLimit float64
+	flag.Float64Var(&rateLimit, "rate", 0, "requests per second (0 = unlimited)")
 
 	flag.Parse()
 
@@ -118,6 +133,12 @@ func main() {
 		Timeout:       timeout,
 	}
 
+	// set up rate limiter (nil if unlimited)
+	var limiter *rate.Limiter
+	if rateLimit > 0 {
+		limiter = rate.NewLimiter(rate.Limit(rateLimit), 1)
+	}
+
 	// domain/port pairs are initially sent on the httpsURLs channel.
 	// If they are listening and the --prefer-https flag is set then
 	// no HTTP check is performed; otherwise they're put onto the httpURLs
@@ -132,12 +153,16 @@ func main() {
 		httpsWG.Add(1)
 
 		go func() {
-			for url := range httpsURLs {
+			for u := range httpsURLs {
+				if limiter != nil {
+					limiter.Wait(context.Background())
+				}
 
 				// always try HTTPS first
-				withProto := "https://" + url
-				if isListening(client, withProto, method, userAgent) {
-					output <- withProto
+				withProto := "https://" + u
+				result := probeURL(client, withProto, method, userAgent, showTitle)
+				if result.success {
+					output <- formatOutput(withProto, result, showStatus, showServer, showTitle)
 
 					// skip trying HTTP if --prefer-https is set
 					if preferHTTPS {
@@ -145,7 +170,7 @@ func main() {
 					}
 				}
 
-				httpURLs <- url
+				httpURLs <- u
 			}
 
 			httpsWG.Done()
@@ -158,11 +183,14 @@ func main() {
 		httpWG.Add(1)
 
 		go func() {
-			for url := range httpURLs {
-				withProto := "http://" + url
-				if isListening(client, withProto, method, userAgent) {
-					output <- withProto
-					continue
+			for u := range httpURLs {
+				if limiter != nil {
+					limiter.Wait(context.Background())
+				}
+				withProto := "http://" + u
+				result := probeURL(client, withProto, method, userAgent, showTitle)
+				if result.success {
+					output <- formatOutput(withProto, result, showStatus, showServer, showTitle)
 				}
 			}
 
@@ -255,25 +283,82 @@ func main() {
 	outputWG.Wait()
 }
 
-func isListening(client *http.Client, url, method string, userAgent string) bool {
+type probeResult struct {
+	success bool
+	status  int
+	server  string
+	title   string
+}
+
+func probeURL(client *http.Client, url, method, userAgent string, needBody bool) probeResult {
+	result := probeResult{}
 
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
-		return false
+		return result
 	}
 	req.Header.Add("User-Agent", userAgent)
 	req.Header.Add("Connection", "close")
 	req.Close = true
 
 	resp, err := client.Do(req)
-	if resp != nil {
-		io.Copy(ioutil.Discard, resp.Body)
-		resp.Body.Close()
-	}
-
 	if err != nil {
-		return false
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.success = true
+	result.status = resp.StatusCode
+	result.server = resp.Header.Get("Server")
+
+	if needBody {
+		// read limited body for title extraction
+		body, err := ioutil.ReadAll(io.LimitReader(resp.Body, 4096))
+		if err == nil {
+			result.title = extractTitle(string(body))
+		}
+	} else {
+		io.Copy(ioutil.Discard, resp.Body)
 	}
 
-	return true
+	return result
+}
+
+func extractTitle(body string) string {
+	lower := strings.ToLower(body)
+	start := strings.Index(lower, "<title>")
+	if start == -1 {
+		return ""
+	}
+	start += 7
+	end := strings.Index(lower[start:], "</title>")
+	if end == -1 {
+		return ""
+	}
+	title := strings.TrimSpace(body[start : start+end])
+	// collapse whitespace
+	title = strings.Join(strings.Fields(title), " ")
+	return title
+}
+
+func formatOutput(url string, r probeResult, showStatus, showServer, showTitle bool) string {
+	out := url
+	if showStatus {
+		out += fmt.Sprintf(" [%d]", r.status)
+	}
+	if showServer {
+		server := r.server
+		if server == "" {
+			server = "-"
+		}
+		out += fmt.Sprintf(" [%s]", server)
+	}
+	if showTitle {
+		title := r.title
+		if title == "" {
+			title = "-"
+		}
+		out += fmt.Sprintf(" [%s]", title)
+	}
+	return out
 }
