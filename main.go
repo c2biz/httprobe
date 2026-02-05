@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 type probeArgs []string
@@ -57,9 +60,9 @@ func main() {
 	var userAgent string
 	flag.StringVar(&userAgent, "A", "httprobe", "HTTP User-Agent to use")
 
-	// HTTP proxy to use
+	// HTTP/SOCKS5 proxy to use
 	var proxyURL string
-	flag.StringVar(&proxyURL, "proxy", "", "HTTP proxy URL (e.g., http://proxy:8080)")
+	flag.StringVar(&proxyURL, "proxy", "", "proxy URL (e.g., http://proxy:8080 or socks5://proxy:1080)")
 
 	flag.Parse()
 
@@ -79,12 +82,30 @@ func main() {
 
 	// Configure proxy if provided
 	if proxyURL != "" {
-		proxy, err := url.Parse(proxyURL)
+		proxyParsed, err := url.Parse(proxyURL)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Invalid proxy URL: %s\n", err)
 			os.Exit(1)
 		}
-		tr.Proxy = http.ProxyURL(proxy)
+
+		if proxyParsed.Scheme == "socks5" {
+			// SOCKS5 proxy - use custom dialer
+			dialer, err := proxy.FromURL(proxyParsed, proxy.Direct)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to create SOCKS5 dialer: %s\n", err)
+				os.Exit(1)
+			}
+			if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
+				tr.DialContext = contextDialer.DialContext
+			} else {
+				tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				}
+			}
+		} else {
+			// HTTP/HTTPS proxy
+			tr.Proxy = http.ProxyURL(proxyParsed)
+		}
 	}
 
 	re := func(req *http.Request, via []*http.Request) error {
