@@ -90,21 +90,56 @@ Route requests through an HTTP or SOCKS5 proxy:
 
 ## Rate Limiting
 
-Control request rate with `-rate` (requests per second):
+Control request rate with `-rate` (requests per second). The limit is global across both the HTTPS and HTTP worker pools, so each `--prefer-https` failure that falls back to HTTP consumes two tokens (one for the HTTPS attempt, one for the HTTP fallback).
 
 ```
 ▶ cat domains.txt | httprobe -rate 5
 ```
 
-Quick reference:
+Quick reference (mean interval — actual interval per probe depends on `-jitter`):
 
-| `-rate` | Requests per minute | Delay between requests |
-|---------|---------------------|------------------------|
-| `10`    | 600/min             | 100ms                  |
-| `5`     | 300/min             | 200ms                  |
-| `1`     | 60/min              | 1s                     |
-| `0.5`   | 30/min              | 2s                     |
-| `0.1`   | 6/min               | 10s                    |
+| `-rate` | Mean interval | /24 scan (worst case) |
+|---------|---------------|------------------------|
+| `10`    | 100ms         | ~1 min                 |
+| `5`     | 200ms         | ~2 min                 |
+| `1`     | 1s            | ~9 min                 |
+| `0.5`   | 2s            | ~17 min                |
+| `0.1`   | 10s           | ~85 min (~1.4 h)       |
+| `0.05`  | 20s           | ~170 min (~2.8 h)      |
+| `0.025` | 40s           | ~5.7 h                 |
+| `0.01`  | 100s          | ~14.2 h                |
+
+Wall-clock for any list is roughly `probes ÷ rate` seconds, where `probes = list_size × 2` in the worst case (every host needs both an HTTPS attempt and an HTTP fallback) or `list_size × 1` in the best case (every host responds to HTTPS with `--prefer-https`).
+
+### Jitter
+
+Strict rate limiting produces near-perfectly-periodic traffic, which is itself a detection signal for behavioural analytics (beaconing detection). Use `-jitter` to randomize the inter-probe interval while preserving the mean rate. The value is a fraction in `[0, 1]`:
+
+```
+▶ cat domains.txt | httprobe -rate 0.05 -jitter 0.5
+```
+
+With `-rate R -jitter J`, each interval is drawn uniformly from `[(1-J)/R, (1+J)/R]`. The mean stays at `1/R`, so the headline `-rate` number remains meaningful. `-jitter` requires `-rate` to be set.
+
+| Setting                        | Per-probe interval | Mean    |
+|--------------------------------|--------------------|---------|
+| `-rate 0.05`                   | exactly 20s        | 20s     |
+| `-rate 0.05 -jitter 0.5`       | uniform `[10s, 30s]` | 20s   |
+| `-rate 0.05 -jitter 1.0`       | uniform `[0s, 40s]`  | 20s   |
+
+### Stats
+
+Use `-stats` to print probe count and effective rate to stderr — both periodically (every 60s) during a run and once at the end:
+
+```
+▶ cat domains.txt | httprobe -rate 0.05 -stats
+...
+[stats] 30 probes in 600.0s = 0.050 req/s
+[stats] 60 probes in 1200.0s = 0.050 req/s
+[stats] 474 probes in 9461.2s = 0.050 req/s (final)
+```
+
+Counts every outbound probe — including HTTPS attempts that fail and fall back to HTTP — which is the right number for stealth budgeting.
 
 ## Docker
 
@@ -128,6 +163,8 @@ Usage of ./httprobe:
         HTTP User-Agent to use (default "httprobe")
   -c int
         set the concurrency level (split equally between HTTPS and HTTP requests) (default 20)
+  -jitter float
+        randomize interval as fraction of 1/rate (0..1, requires -rate)
   -method string
         HTTP method to use (default "GET")
   -p value
@@ -141,6 +178,8 @@ Usage of ./httprobe:
   -s    skip the default probes (http:80 and https:443)
   -server
         show Server header
+  -stats
+        print probe count and effective rate to stderr (periodic + final)
   -status
         show HTTP status code
   -t int

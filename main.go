@@ -8,16 +8,17 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/proxy"
-	"golang.org/x/time/rate"
 )
 
 type probeArgs []string
@@ -79,7 +80,24 @@ func main() {
 	var rateLimit float64
 	flag.Float64Var(&rateLimit, "rate", 0, "requests per second (0 = unlimited)")
 
+	// jitter as a fraction of the base interval (0..1); requires -rate
+	var jitter float64
+	flag.Float64Var(&jitter, "jitter", 0, "randomize interval as fraction of 1/rate (0..1, requires -rate)")
+
+	// periodic + final probe stats to stderr
+	var showStats bool
+	flag.BoolVar(&showStats, "stats", false, "print probe count and effective rate to stderr (periodic + final)")
+
 	flag.Parse()
+
+	if jitter < 0 || jitter > 1 {
+		fmt.Fprintf(os.Stderr, "invalid -jitter %v: must be between 0 and 1\n", jitter)
+		os.Exit(1)
+	}
+	if jitter > 0 && rateLimit <= 0 {
+		fmt.Fprintln(os.Stderr, "-jitter requires -rate to be set")
+		os.Exit(1)
+	}
 
 	// make an actual time.Duration out of the timeout
 	timeout := time.Duration(to * 1000000)
@@ -133,10 +151,30 @@ func main() {
 		Timeout:       timeout,
 	}
 
-	// set up rate limiter (nil if unlimited)
-	var limiter *rate.Limiter
-	if rateLimit > 0 {
-		limiter = rate.NewLimiter(rate.Limit(rateLimit), 1)
+	// gate paces outbound probes. With rateLimit <= 0 it's a no-op.
+	gate := newPacer(rateLimit, jitter)
+
+	var probeCount atomic.Int64
+	startTime := time.Now()
+
+	var statsDone chan struct{}
+	var statsWG sync.WaitGroup
+	if showStats {
+		statsDone = make(chan struct{})
+		statsWG.Add(1)
+		go func() {
+			defer statsWG.Done()
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					printStats(probeCount.Load(), startTime, false)
+				case <-statsDone:
+					return
+				}
+			}
+		}()
 	}
 
 	// domain/port pairs are initially sent on the httpsURLs channel.
@@ -154,9 +192,8 @@ func main() {
 
 		go func() {
 			for u := range httpsURLs {
-				if limiter != nil {
-					limiter.Wait(context.Background())
-				}
+				gate()
+				probeCount.Add(1)
 
 				// always try HTTPS first
 				withProto := "https://" + u
@@ -184,9 +221,8 @@ func main() {
 
 		go func() {
 			for u := range httpURLs {
-				if limiter != nil {
-					limiter.Wait(context.Background())
-				}
+				gate()
+				probeCount.Add(1)
 				withProto := "http://" + u
 				result := probeURL(client, withProto, method, userAgent, showTitle)
 				if result.success {
@@ -281,6 +317,51 @@ func main() {
 
 	// Wait until the output waitgroup is done
 	outputWG.Wait()
+
+	if showStats {
+		close(statsDone)
+		statsWG.Wait()
+		printStats(probeCount.Load(), startTime, true)
+	}
+}
+
+func newPacer(ratePerSec, jitter float64) func() {
+	if ratePerSec <= 0 {
+		return func() {}
+	}
+	base := time.Duration(float64(time.Second) / ratePerSec)
+	var mu sync.Mutex
+	nextSlot := time.Now()
+	return func() {
+		mu.Lock()
+		now := time.Now()
+		slot := nextSlot
+		if slot.Before(now) {
+			slot = now
+		}
+		factor := 1.0
+		if jitter > 0 {
+			factor = 1.0 + (rand.Float64()*2-1)*jitter
+		}
+		nextSlot = slot.Add(time.Duration(float64(base) * factor))
+		mu.Unlock()
+		if d := time.Until(slot); d > 0 {
+			time.Sleep(d)
+		}
+	}
+}
+
+func printStats(n int64, start time.Time, final bool) {
+	elapsed := time.Since(start).Seconds()
+	r := 0.0
+	if elapsed > 0 {
+		r = float64(n) / elapsed
+	}
+	suffix := ""
+	if final {
+		suffix = " (final)"
+	}
+	fmt.Fprintf(os.Stderr, "[stats] %d probes in %.1fs = %.3f req/s%s\n", n, elapsed, r, suffix)
 }
 
 type probeResult struct {
